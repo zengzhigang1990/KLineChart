@@ -11,7 +11,6 @@ import android.util.AttributeSet;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.GestureDetector;
-import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.VelocityTracker;
 import android.view.View;
@@ -28,6 +27,11 @@ import zzg.klinechart.internal.Renderer;
  */
 public class KLineChart extends View {
 
+  private static final int SCROLL_STATE_IDLE = 0;
+  private static final int SCROLL_STATE_DRAGGING = 1;
+  private static final int SCROLL_STATE_SETTLING = 2;
+
+  private int mScrollState = SCROLL_STATE_IDLE;
   private VelocityTracker mVelocityTracker;
   private int mTouchSlop;
   private float mLastTouchX;
@@ -150,6 +154,10 @@ public class KLineChart extends View {
         mScrollPointerId = MotionEventCompat.getPointerId(e, 0);
         mLastTouchX = (int) (e.getX() + 0.5f);
         mLastTouchY = (int) (e.getY() + 0.5f);
+
+        if (mScrollState == SCROLL_STATE_SETTLING) {
+          setScrollState(SCROLL_STATE_DRAGGING);
+        }
         break;
       }
       case MotionEventCompat.ACTION_POINTER_DOWN: {
@@ -170,7 +178,30 @@ public class KLineChart extends View {
         float dx = mLastTouchX - x;
         float dy = mLastTouchY - y;
 
-        if (Math.abs(dx) > mTouchSlop) {
+        if (mScrollState != SCROLL_STATE_DRAGGING) {
+          boolean startScroll = false;
+          if (Math.abs(dx) > mTouchSlop) {
+            if (dx > 0) {
+              dx -= mTouchSlop;
+            } else {
+              dx += mTouchSlop;
+            }
+            startScroll = true;
+          }
+          if (Math.abs(dy) > mTouchSlop) {
+            if (dy > 0) {
+              dy -= mTouchSlop;
+            } else {
+              dy += mTouchSlop;
+            }
+            startScroll = true;
+          }
+          if (startScroll) {
+            setScrollState(SCROLL_STATE_DRAGGING);
+          }
+        }
+
+        if (mScrollState == SCROLL_STATE_DRAGGING) {
           mLastTouchX = x;
           mLastTouchY = y;
 
@@ -197,14 +228,15 @@ public class KLineChart extends View {
             -VelocityTrackerCompat.getXVelocity(mVelocityTracker, mScrollPointerId);
         final float yvel =
             -VelocityTrackerCompat.getYVelocity(mVelocityTracker, mScrollPointerId);
-        if (xvel != 0 || yvel != 0) {
-          fling((int) xvel, (int) yvel);
+        if (!((xvel != 0 || yvel != 0) && fling((int) xvel, (int) yvel))) {
+          setScrollState(SCROLL_STATE_IDLE);
         }
         resetTouch();
         break;
       }
       case MotionEvent.ACTION_CANCEL: {
         resetTouch();
+        setScrollState(SCROLL_STATE_IDLE);
         break;
       }
     }
@@ -217,13 +249,27 @@ public class KLineChart extends View {
     return true;
   }
 
+  private void setScrollState(int state) {
+    if (state == mScrollState) {
+      return;
+    }
+    mScrollState = state;
+    if (state != SCROLL_STATE_SETTLING) {
+      stopScrollersInternal();
+    }
+  }
+
+  private void stopScrollersInternal() {
+    mViewFlinger.stop();
+  }
+
   private void resetTouch() {
     if (mVelocityTracker != null) {
       mVelocityTracker.clear();
     }
   }
 
-  private void fling(int velocityX, int velocityY) {
+  private boolean fling(int velocityX, int velocityY) {
     if (Math.abs(velocityX) < mMinFlingVelocity) {
       velocityX = 0;
     }
@@ -232,12 +278,13 @@ public class KLineChart extends View {
     }
     if (velocityX == 0 && velocityY == 0) {
       // If we don't have any velocity, return false
-      return;
+      return false;
     }
 
     velocityX = Math.max(-mMaxFlingVelocity, Math.min(velocityX, mMaxFlingVelocity));
     velocityY = Math.max(-mMaxFlingVelocity, Math.min(velocityY, mMaxFlingVelocity));
     mViewFlinger.fling(velocityX, velocityY);
+    return true;
   }
 
   private void scroll(float dx, float dy) {
@@ -290,10 +337,16 @@ public class KLineChart extends View {
     }
 
     public void fling(int velocityX, int velocityY) {
+      setScrollState(SCROLL_STATE_SETTLING);
       mLastFlingX = mLastFlingY = 0;
       mScroller.fling(0, 0, velocityX, velocityY,
           Integer.MIN_VALUE, Integer.MAX_VALUE, Integer.MIN_VALUE, Integer.MAX_VALUE);
       postOnAnimation();
+    }
+
+    public void stop() {
+      removeCallbacks(this);
+      mScroller.abortAnimation();
     }
   }
 }
